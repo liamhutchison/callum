@@ -78,6 +78,26 @@ async def summarize_text(text: str, bullet_count: int) -> str:
         raise HTTPException(status_code=502, detail=f"Summary failed: {exc}") from exc
 
 
+async def title_from_text(text: str) -> str:
+    prompt = (
+        "Provide a short title (max 10 words) that captures the main topic. Don't include Connected Mine in the title as that is the company's name.\n\n"
+        f"Transcript:\n{text}"
+    )
+
+    def _run():
+        resp = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        return resp.choices[0].message.content.strip()
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Title generation failed: {exc}") from exc
+
+
 def categorize(filename: str, summary: str) -> str:
     name_lower = filename.lower()
     if "interview" in name_lower:
@@ -109,6 +129,14 @@ async def get_file(item_id: str):
     return item
 
 
+@app.delete("/files/{item_id}")
+async def delete_file(item_id: str):
+    if item_id not in stored_items:
+        raise HTTPException(status_code=404, detail="Not found")
+    stored_items.pop(item_id)
+    return {"deleted": item_id}
+
+
 @app.post("/upload")
 async def upload(files: List[UploadFile] = File(...)):
     if not files:
@@ -134,6 +162,7 @@ async def upload(files: List[UploadFile] = File(...)):
             transcription = await transcribe_file(temp_path)
             bullets = bullet_count_for_text(transcription)
             summary = await summarize_text(transcription, bullets)
+            title = await title_from_text(summary)
         finally:
             try:
                 os.remove(temp_path)
@@ -145,6 +174,7 @@ async def upload(files: List[UploadFile] = File(...)):
         record = {
             "id": item_id,
             "filename": file.filename,
+            "title": title,
             "message": "Transcribed successfully.",
             "transcription": transcription,
             "summary": summary,
